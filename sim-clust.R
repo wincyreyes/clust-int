@@ -173,9 +173,30 @@ weighted.clus <- function(data,varnames,coefs,clus=3){
   return(weighted_clusters)
 }
 
+# ====== NEW FUNCTION: Assign test data to pre-trained kmeans clusters ======
+# Prevents double dipping by NOT re-clustering on test data
+assign_kmeans_clusters <- function(test_data, kmeans_model) {
+  # Find nearest cluster center for each test observation
+  centers <- kmeans_model$centers
+  
+  # Calculate Euclidean distances from each test point to each center
+  distances <- as.matrix(dist(rbind(test_data, centers)))
+  n_test <- nrow(test_data)
+  n_centers <- nrow(centers)
+  
+  # Extract distances from test points to centers only
+  dist_to_centers <- distances[1:n_test, (n_test + 1):(n_test + n_centers)]
+  
+  # Assign each test point to the nearest center
+  cluster_assignments <- apply(dist_to_centers, 1, which.min)
+  return(cluster_assignments)
+}
 
-##ALL CLUSTERING
-clus.inter <- function(y,grs,ers,ersvars=NA,coefs=NA,data,binary=F){
+##ALL CLUSTERING - FIXED VERSION
+# This version accepts pre-trained clustering assignments from the training data
+clus.inter <- function(y,grs,ers,ersvars=NA,coefs=NA,data,binary=F,
+                       ers_clus_pretrained=NULL, ers_wclus_pretrained=NULL, 
+                       ers_gmm_pretrained=NULL){
   
   grs_bin <- to_halves(data[,"grs"])
   ers_bin <- to_halves(data[,"ers"])
@@ -183,13 +204,30 @@ clus.inter <- function(y,grs,ers,ersvars=NA,coefs=NA,data,binary=F){
   ers_quart <- to_quartiles(data[,"ers"])
   ers_mid80 <- split_mid80(data[,"ers"])
   ers_mid90 <- split_mid90(data[,"ers"])
-  ersmat <- data[,ersvars]
-  ers_clus <- kmeans(ersmat,centers=3)$cluster
-  ers_wclus <- weighted.clus(data,ersvars,coefs,clus=3)
-  # ADD GMM CLUSTERING HERE
   
-  gmm_fit <- Mclust(ersmat, G = 3, verbose=F)
-  ers_gmm <- gmm_fit$classification
+  # Use pre-trained clusters if provided, otherwise cluster on current data
+  # (WARNING: clustering on current data causes double dipping when used on test set!)
+  if (!is.null(ers_clus_pretrained)) {
+    ers_clus <- ers_clus_pretrained
+  } else {
+    ersmat <- data[,ersvars]
+    ers_clus <- kmeans(ersmat, centers=3)$cluster
+  }
+  
+  if (!is.null(ers_wclus_pretrained)) {
+    ers_wclus <- ers_wclus_pretrained
+  } else {
+    ersmat <- data[,ersvars]
+    ers_wclus <- weighted.clus(data, ersvars, coefs, clus=3)
+  }
+  
+  if (!is.null(ers_gmm_pretrained)) {
+    ers_gmm <- ers_gmm_pretrained
+  } else {
+    ersmat <- data[,ersvars]
+    gmm_fit <- Mclust(ersmat, G = 3, verbose=F)
+    ers_gmm <- gmm_fit$classification
+  }
   
   if(binary==T){
     glm_bin <- glm(y ~ grs_bin + ers_bin+grs_bin*ers_bin, data, family="binomial")
@@ -222,12 +260,13 @@ clus.inter <- function(y,grs,ers,ersvars=NA,coefs=NA,data,binary=F){
   dim(results)
   colnames(results) <- c("median","tertile","quartile","mid80","mid90","clus","wclus","gmm")
   rownames(results) <- c("ers","gxe","grs")
-  #out <- list(pvals_bin,pvals_tert,pvals_quart,pvals_mid80,pvals_mid90,pvals_clus,pvals_wclus)
   return(results)
 }
 
 
-clus.inter2 <- function(y,grs,ers,ersvars=NA,coefs=NA,data,binary=F){ ##raw data for ERS, no SNP - GRS only available
+clus.inter2 <- function(y,grs,ers,ersvars=NA,coefs=NA,data,binary=F,
+                        ers_clus_pretrained=NULL, ers_wclus_pretrained=NULL, 
+                        ers_gmm_pretrained=NULL){ ##raw data for ERS, no SNP - GRS only available
   
   grs_bin <- to_halves(grs)
   ers_bin <- to_halves(ers)
@@ -235,13 +274,29 @@ clus.inter2 <- function(y,grs,ers,ersvars=NA,coefs=NA,data,binary=F){ ##raw data
   ers_quart <- to_quartiles(ers)
   ers_mid80 <- split_mid80(ers)
   ers_mid90 <- split_mid90(ers)
-  ersmat <- data[,ersvars]
-  ers_clus <- kmeans(ersmat,centers=3)$cluster
-  ers_wclus <- weighted.clus(data,ersvars,coefs,clus=3)
-  # ADD GMM CLUSTERING HERE
   
-  gmm_fit <- Mclust(ersmat, G = 3, verbose=F)
-  ers_gmm <- gmm_fit$classification
+  # Use pre-trained clusters if provided
+  if (!is.null(ers_clus_pretrained)) {
+    ers_clus <- ers_clus_pretrained
+  } else {
+    ersmat <- data[,ersvars]
+    ers_clus <- kmeans(ersmat, centers=3)$cluster
+  }
+  
+  if (!is.null(ers_wclus_pretrained)) {
+    ers_wclus <- ers_wclus_pretrained
+  } else {
+    ersmat <- data[,ersvars]
+    ers_wclus <- weighted.clus(data, ersvars, coefs, clus=3)
+  }
+  
+  if (!is.null(ers_gmm_pretrained)) {
+    ers_gmm <- ers_gmm_pretrained
+  } else {
+    ersmat <- data[,ersvars]
+    gmm_fit <- Mclust(ersmat, G = 3, verbose=F)
+    ers_gmm <- gmm_fit$classification
+  }
   
   if(binary==T){
     glm_bin <- glm(y ~ grs_bin + ers_bin+grs_bin*ers_bin, data, family="binomial")
@@ -274,7 +329,6 @@ clus.inter2 <- function(y,grs,ers,ersvars=NA,coefs=NA,data,binary=F){ ##raw data
   dim(results)
   colnames(results) <- c("median","tertile","quartile","mid80","mid90","clus","wclus","gmm")
   rownames(results) <- c("ers","gxe","grs")
-  #out <- list(pvals_bin,pvals_tert,pvals_quart,pvals_mid80,pvals_mid90,pvals_clus,pvals_wclus)
   return(results)
 }
 
@@ -640,7 +694,7 @@ interact.clust.test <- function(alpha,corr,beta_GxE,beta_GRS,beta_ERS,p_env){
     colnames(weights0) <- colnames(merged)
     weights0norm <- rbind(weights0norm, weights0)
     colnames(train_weights) <- names(coef(fit_rs_bin, s = "lambda.min"))[-1]
-    scores0 <- matrix(NA,nrow=length(train_idx),ncol=length(subsets))
+    scores0 <- matrix(NA,nrow=length(test_idx),ncol=length(subsets))
     for(j in seq_along(subsets)){
       # print(j)
       res <- riskscores_sub_abs(subsets[[j]], weights0[,], Xmat=merged[test_idx,])
@@ -663,9 +717,32 @@ interact.clust.test <- function(alpha,corr,beta_GxE,beta_GRS,beta_ERS,p_env){
     test.bin <- c(summary(glm_result)$coefficients[,4]["ers"],
                   summary(glm_result)$coefficients[,4]["grs:ers"],
                   summary(glm_result)$coefficients[,4]["grs"])
+    
+    # ====== FIXED: Train clustering on training data, apply to test data ======
+    # Train kmeans on training data
+    ersmat_train <- ENVdata[train_idx, ]
+    kmeans_fit <- kmeans(ersmat_train, centers=3)
+    # Apply to test data
+    ers_clus_test <- assign_kmeans_clusters(ENVdata[test_idx, ], kmeans_fit)
+    
+    # Train weighted clustering on training data with risk score weights
+    weighted_ERS_train <- sweep(ersmat_train, 2, weights0norm[,grepl("ENV",colnames(weights0norm))], FUN = "*")
+    kmeans_wfit <- kmeans(weighted_ERS_train, centers=3)
+    # Apply to test data
+    weighted_ERS_test <- sweep(ENVdata[test_idx, ], 2, weights0norm[,grepl("ENV",colnames(weights0norm))], FUN = "*")
+    ers_wclus_test <- assign_kmeans_clusters(weighted_ERS_test, kmeans_wfit)
+    
+    # Train GMM on training data
+    gmm_train <- Mclust(ersmat_train, G=3, verbose=F)
+    # Apply to test data
+    ers_gmm_test <- predict(gmm_train, ENVdata[test_idx,])$classification
+    
     clust.dat <- data.frame(ers=scores0[,!all0],grs=grs[test_idx],ENVdata[test_idx,])
-    clus.pvals <- clus.inter(y_bin[test_idx],grs=grs,ers=ers,ersvars=colnames(ENVdata),
-                             coefs=weights0norm[,grepl("ENV",colnames(weights0norm))],data=clust.dat,binary=T)
+    clus.pvals <- clus.inter(y_bin[test_idx],grs=grs[test_idx],ers=scores0[,!all0],ersvars=colnames(ENVdata),
+                             coefs=weights0norm[,grepl("ENV",colnames(weights0norm))],data=clust.dat,binary=T,
+                             ers_clus_pretrained=ers_clus_test,
+                             ers_wclus_pretrained=ers_wclus_test,
+                             ers_gmm_pretrained=ers_gmm_test)
     outbin[[l]] <- data.frame(clus.pvals,test=test.bin,real=pvals_realb)
     
     
@@ -680,7 +757,7 @@ interact.clust.test <- function(alpha,corr,beta_GxE,beta_GRS,beta_ERS,p_env){
     colnames(weights0) <- colnames(merged)
     weights0norm <- rbind(weights0norm, weights0)
     colnames(train_weights) <- names(coef(fit_rs_cont, s = "lambda.min"))[-1]
-    scores0 <- matrix(NA,nrow=length(train_idx),ncol=length(subsets))
+    scores0 <- matrix(NA,nrow=length(test_idx),ncol=length(subsets))
     for(j in seq_along(subsets)){
       #print(j)
       res <- riskscores_sub_abs(subsets[[j]], weights0[,], Xmat=merged[test_idx,])
@@ -703,9 +780,26 @@ interact.clust.test <- function(alpha,corr,beta_GxE,beta_GRS,beta_ERS,p_env){
     test.cont <- c(summary(glm_result)$coefficients[,4]["ers"],
                    summary(glm_result)$coefficients[,4]["grs:ers"],
                    summary(glm_result)$coefficients[,4]["grs"])
+    
+    # ====== FIXED: Train clustering on training data, apply to test data ======
+    ersmat_train <- ENVdata[train_idx, ]
+    kmeans_fit <- kmeans(ersmat_train, centers=3)
+    ers_clus_test <- assign_kmeans_clusters(ENVdata[test_idx, ], kmeans_fit)
+    
+    weighted_ERS_train <- sweep(ersmat_train, 2, weights0norm[,grepl("ENV",colnames(weights0norm))], FUN = "*")
+    kmeans_wfit <- kmeans(weighted_ERS_train, centers=3)
+    weighted_ERS_test <- sweep(ENVdata[test_idx, ], 2, weights0norm[,grepl("ENV",colnames(weights0norm))], FUN = "*")
+    ers_wclus_test <- assign_kmeans_clusters(weighted_ERS_test, kmeans_wfit)
+    
+    gmm_train <- Mclust(ersmat_train, G=3, verbose=F)
+    ers_gmm_test <- predict(gmm_train, ENVdata[test_idx,])$classification
+    
     clust.dat <- data.frame(ers=scores0[,!all0],grs=grs[test_idx],ENVdata[test_idx,])
-    clus.pvals <- clus.inter(y_bin[test_idx],grs=grs[test_idx],ers=scores0[,!all0],ersvars=colnames(ENVdata),
-                             coefs=weights0norm[,grepl("ENV",colnames(weights0norm))],data=clust.dat,binary=F)
+    clus.pvals <- clus.inter(y_cont[test_idx],grs=grs[test_idx],ers=scores0[,!all0],ersvars=colnames(ENVdata),
+                             coefs=weights0norm[,grepl("ENV",colnames(weights0norm))],data=clust.dat,binary=F,
+                             ers_clus_pretrained=ers_clus_test,
+                             ers_wclus_pretrained=ers_wclus_test,
+                             ers_gmm_pretrained=ers_gmm_test)
     outcont[[l]] <- data.frame(clus.pvals,test=test.cont,real=pvals_realc)
     
     
@@ -859,7 +953,7 @@ interact.clust.test2 <- function(alpha,sd,beta_GxE,beta_GRS,beta_ERS,p_env){
     colnames(weights0) <- colnames(merged)
     weights0norm <- rbind(weights0norm, weights0)
     colnames(train_weights) <- names(coef(fit_rs_bin, s = "lambda.min"))[-1]
-    scores0 <- matrix(NA,nrow=length(train_idx),ncol=length(subsets))
+    scores0 <- matrix(NA,nrow=length(test_idx),ncol=length(subsets))
     for(j in seq_along(subsets)){
       # print(j)
       res <- riskscores_sub_abs(subsets[[j]], weights0[,], Xmat=merged[test_idx,])
@@ -882,9 +976,26 @@ interact.clust.test2 <- function(alpha,sd,beta_GxE,beta_GRS,beta_ERS,p_env){
     test.bin <- c(summary(glm_result)$coefficients[,4]["ers"],
                   summary(glm_result)$coefficients[,4]["grs:ers"],
                   summary(glm_result)$coefficients[,4]["grs"])
+    
+    # ====== FIXED: Train clustering on training data, apply to test data ======
+    ersmat_train <- ENVdata[train_idx, ]
+    kmeans_fit <- kmeans(ersmat_train, centers=3)
+    ers_clus_test <- assign_kmeans_clusters(ENVdata[test_idx, ], kmeans_fit)
+    
+    weighted_ERS_train <- sweep(ersmat_train, 2, weights0norm[,grepl("ENV",colnames(weights0norm))], FUN = "*")
+    kmeans_wfit <- kmeans(weighted_ERS_train, centers=3)
+    weighted_ERS_test <- sweep(ENVdata[test_idx, ], 2, weights0norm[,grepl("ENV",colnames(weights0norm))], FUN = "*")
+    ers_wclus_test <- assign_kmeans_clusters(weighted_ERS_test, kmeans_wfit)
+    
+    gmm_train <- Mclust(ersmat_train, G=3, verbose=F)
+    ers_gmm_test <- predict(gmm_train, ENVdata[test_idx,])$classification
+    
     clust.dat <- data.frame(ers=scores0[,!all0],grs=grs[test_idx],ENVdata[test_idx,])
-    clus.pvals <- clus.inter(y_bin[test_idx],grs=grs,ers=ers,ersvars=colnames(ENVdata),
-                             coefs=weights0norm[,grepl("ENV",colnames(weights0norm))],data=clust.dat,binary=T)
+    clus.pvals <- clus.inter(y_bin[test_idx],grs=grs[test_idx],ers=scores0[,!all0],ersvars=colnames(ENVdata),
+                             coefs=weights0norm[,grepl("ENV",colnames(weights0norm))],data=clust.dat,binary=T,
+                             ers_clus_pretrained=ers_clus_test,
+                             ers_wclus_pretrained=ers_wclus_test,
+                             ers_gmm_pretrained=ers_gmm_test)
     outbin[[l]] <- data.frame(clus.pvals,test=test.bin,real=pvals_realb)
     
     
@@ -899,7 +1010,7 @@ interact.clust.test2 <- function(alpha,sd,beta_GxE,beta_GRS,beta_ERS,p_env){
     colnames(weights0) <- colnames(merged)
     weights0norm <- rbind(weights0norm, weights0)
     colnames(train_weights) <- names(coef(fit_rs_cont, s = "lambda.min"))[-1]
-    scores0 <- matrix(NA,nrow=length(train_idx),ncol=length(subsets))
+    scores0 <- matrix(NA,nrow=length(test_idx),ncol=length(subsets))
     for(j in seq_along(subsets)){
       #print(j)
       res <- riskscores_sub_abs(subsets[[j]], weights0[,], Xmat=merged[test_idx,])
@@ -922,9 +1033,26 @@ interact.clust.test2 <- function(alpha,sd,beta_GxE,beta_GRS,beta_ERS,p_env){
     test.cont <- c(summary(glm_result)$coefficients[,4]["ers"],
                    summary(glm_result)$coefficients[,4]["grs:ers"],
                    summary(glm_result)$coefficients[,4]["grs"])
+    
+    # ====== FIXED: Train clustering on training data, apply to test data ======
+    ersmat_train <- ENVdata[train_idx, ]
+    kmeans_fit <- kmeans(ersmat_train, centers=3)
+    ers_clus_test <- assign_kmeans_clusters(ENVdata[test_idx, ], kmeans_fit)
+    
+    weighted_ERS_train <- sweep(ersmat_train, 2, weights0norm[,grepl("ENV",colnames(weights0norm))], FUN = "*")
+    kmeans_wfit <- kmeans(weighted_ERS_train, centers=3)
+    weighted_ERS_test <- sweep(ENVdata[test_idx, ], 2, weights0norm[,grepl("ENV",colnames(weights0norm))], FUN = "*")
+    ers_wclus_test <- assign_kmeans_clusters(weighted_ERS_test, kmeans_wfit)
+    
+    gmm_train <- Mclust(ersmat_train, G=3, verbose=F)
+    ers_gmm_test <- predict(gmm_train, ENVdata[test_idx,])$classification
+    
     clust.dat <- data.frame(ers=scores0[,!all0],grs=grs[test_idx],ENVdata[test_idx,])
-    clus.pvals <- clus.inter(y_bin[test_idx],grs=grs[test_idx],ers=scores0[,!all0],ersvars=colnames(ENVdata),
-                             coefs=weights0norm[,grepl("ENV",colnames(weights0norm))],data=clust.dat,binary=F)
+    clus.pvals <- clus.inter(y_cont[test_idx],grs=grs[test_idx],ers=scores0[,!all0],ersvars=colnames(ENVdata),
+                             coefs=weights0norm[,grepl("ENV",colnames(weights0norm))],data=clust.dat,binary=F,
+                             ers_clus_pretrained=ers_clus_test,
+                             ers_wclus_pretrained=ers_wclus_test,
+                             ers_gmm_pretrained=ers_gmm_test)
     outcont[[l]] <- data.frame(clus.pvals,test=test.cont,real=pvals_realc)
     
     
@@ -939,31 +1067,6 @@ interact.clust.test2 <- function(alpha,sd,beta_GxE,beta_GRS,beta_ERS,p_env){
                        select(prop_sig)))
   return(output)
 }
-# set.seed(12345)
-# test1sc <- interact.clust.test(alpha=0,beta_GxE=1e-16,beta_GRS=0.3,beta_ERS=0.5,p_env=3)
-# 
-# sc.ex <- expand.grid(alpha=c(0,0.5,0.99),beta_GxE=c(1e-16), beta_GRS=c(-0.3,1e-16,0.3),
-#                      beta_ERS=c(-0.3,1e-16,0.3))
-# 
-# Vec.GxE.Sim<- Vectorize(interact.clust.test,vectorize.args=c("alpha","beta_GxE","beta_GRS",
-#                                                              "beta_ERS"))
-# #trace("Vec.GxE.Sim", tracer = quote(print(list(...))), print = FALSE)
-# try <- Vec.GxE.Sim(alpha=sc.ex$alpha,beta_GxE=sc.ex$beta_GxE,
-#                    beta_GRS=sc.ex$beta_GRS,beta_ERS=sc.ex$beta_ERS)
-# #GxE exists - get sensitivity
-# 
-# #GxE non-existent - get fp
-# binres <- try[1:10,]
-# contres <- try[11:20,]
-# rownames(binres) <- rownames(contres) <- c("clus","gmm","median","mid80","mid90","quartile","real","tertile","test","wclus")
-# 
-# out.bin.final <- cbind(sc.ex,t(binres))
-# out.cont.final <- cbind(sc.ex,t(contres))
-# save(out.bin.final,file=paste("/home/wincy.reyes@IUF.LAN/epishare/Transfer/Wincy Reyes/sim-fpr-bin2_eff.Rdata"))
-# save(out.cont.final,file=paste("/home/wincy.reyes@IUF.LAN/epishare/Transfer/Wincy Reyes/sim-fpr-cont2_eff.Rdata"))
-# save(out.bin.final,file=paste("/sim-fpr-bin2_eff-gmm-grssim.Rdata"))
-# save(out.cont.final,file=paste("/sim-fpr-cont2_eff-gmm-grssim.Rdata"))
-
 
 #Only Positives
 ####SENSITIVITY (true GxE exists)
